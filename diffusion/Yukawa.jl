@@ -1,55 +1,50 @@
 module Yukawa
 
-    export YukawaSolve, YukawaSolveBarycentric
+    export YukawaSolve, YukawaSolveMatrixFree
 
     using FFTW
     using LinearAlgebra: norm, dot, I
     using SpecialFunctions: besselk
     using IterativeSolvers: gmres
+    using LinearMaps: LinearMap
 
-    function YukawaSolve(dΩ, f, s)
-            
+    function YukawaSolveMatrixFree(dΩ, f, s)
+
         # geometry
-        n̂, J, κ = Yukawa.GeomDerivs(dΩ)
+        # n̂, J, κ = Yukawa.GeomDerivs(dΩ)
+        n̂ = vcat([d[1] for d in Yukawa.GeomDerivs.(dΩ)]...)
+        J = vcat([d[2] for d in Yukawa.GeomDerivs.(dΩ)]...)
+        κ = vcat([d[3] for d in Yukawa.GeomDerivs.(dΩ)]...)
+        dΩ = vcat(dΩ...)
         # solve SKIE
-        σ, gmres_log = gmres(-I/2 + Yukawa.DLP(dΩ, s), -f.(dΩ, s); reltol = 1e-12, maxiter=128, log=true)
+        σ, gmres_log = gmres(Yukawa.matvec(dΩ, s), f.(dΩ, s); reltol = 1e-12, maxiter=128, log=true)
+        @show gmres_log
         # evaluate DLP at (x; s)
         Cʰ(x, s) = -sqrt(s)/length(dΩ) * sum(besselk.(1, sqrt(s) * abs.(x .- dΩ)) .* real(dot.(x .- dΩ, n̂)) ./ abs.(x .- dΩ) .* σ .* J)
         # construct C from Cp, Ch
-        C(x, s) = Cʰ(x, s) + f(x, s)
+        C(x, s) = Cʰ(x, s) - f(x, s)
+        # C(x, s) = -f(x, s)
 
         return C
 
     end
 
-    function YukawaSolveBarycentric(dΩ, f, s)
-        
-        ℱ = x -> fftshift(fft(x))
-        ℱ⁻¹ = x -> ifft(ifftshift(x))
-        modes = N -> N % 2 == 0 ? [0; 1-N÷2:N÷2-1] : collect(-(N-1)÷2:(N-1)÷2)
-        ∂ = fx -> im * modes(length(fx)) .* fx
+    function YukawaSolve(dΩ, f, s)
 
         # geometry
-        n̂, J, κ = GeomDerivs(dΩ)
+        n̂ = vcat([d[1] for d in Yukawa.GeomDerivs.(dΩ.dΩ)]...)
+        J = vcat([d[2] for d in Yukawa.GeomDerivs.(dΩ.dΩ)]...)
+        κ = vcat([d[3] for d in Yukawa.GeomDerivs.(dΩ.dΩ)]...)
+        dΩ′ = vcat(dΩ.dΩ...)
+
         # solve SKIE
-        σ, gmres_log = gmres(-I/2 + DLP(dΩ, s), -f.(dΩ, s); reltol = 1e-12, maxiter=128, log=true)
-        # SMOOTH COMPONENT
-        smooth(x, s) = besselk.(1, sqrt(s) * abs.(x .- dΩ)) + log.(x .- dΩ)
-        trap(x, s) = -sqrt(s)/length(dΩ) * sum(smooth(x, s) .* real(dot.(x .- dΩ, n̂)) ./ abs.(x .- dΩ) .* σ .* J)
+        σ, gmres_log = gmres(I/2 + Yukawa.DLP(dΩ′, dΩ.M, n̂, J, κ, s), -f.(dΩ′, s); reltol = 1e-12, maxiter=128, log=true)
 
-        # LOGARITHMIC COMPONENT
-        σ′ = (ℱ⁻¹ ∘ ∂ ∘ ℱ)(σ)
-        # boundary data on v(x), where v(x) defined as D[σ](x) = Re(v(x))
-        v₀ = σ .- 1 / (2π * im) * (2π / length(dΩ)) * [sum(replace!(x -> isnan(x) ? σ₀′ : x, (σ₀ .- σ) ./ (x₀ .- dΩ))) for (x₀, σ₀, σ₀′) in zip(dΩ, σ, σ′)]
-        # cauchy integral
-        v⁺(x) = 1 / (2π*im) * 2π / length(dΩ) * sum(v₀ ./ (dΩ .- x) .* (im .* n̂ .* J))
-        # a = sum(dΩ) / length(dΩ) # some point in Ωᶜ
-        cauchy_one(x, a) = 1 / (x - a) / (2π*im) * 2π / length(dΩ) * sum(1 ./ (dΩ .- x) ./ (dΩ .- a) .* (im .* n̂ .* J))
-        v(x) = v⁺(x) / cauchy_one(x, sum(dΩ) / length(dΩ))
-        Cʰ(x, s) = trap(x, s) + real(v(x))
-
+        # evaluate DLP at (x; s)
+        Cʰ(x, s) = -sqrt(s) / dΩ.N * dΩ.M * sum(besselk.(1, sqrt(s) * abs.(x .- dΩ′)) .* real(dot.(x .- dΩ′, n̂)) ./ abs.(x .- dΩ′) .* σ .* J)
+        # Cʰ(x, s) = -sqrt(s)/length(dΩ) * sum(besselk.(1, sqrt(s) * abs.(x .- dΩ)) .* real(dot.(x .- dΩ, n̂)) ./ abs.(x .- dΩ) .* σ .* J)
         # construct C from Cp, Ch
-        C(x, s) = Cʰ(x, s) + f(x, s)
+        C(x, s) = Cʰ(x, s) - f(x, s)
 
         return C
 
@@ -79,18 +74,36 @@ module Yukawa
     end
 
     # generate double layer potential matrix
-    function DLP(dΩ::Array{Complex{Float64}, 1}, s::Complex{Float64})
+    function DLP(dΩ, M, n̂, J, κ, s::Complex{Float64})
 
-        N = length(dΩ)
-        
-        # derivatives at boundary points
-        n̂, J, κ = GeomDerivs(dΩ)
-        
         # DLP off-diagonal terms
         K(i, j) = -sqrt(s) * besselk(1, sqrt(s) * abs(dΩ[i] - dΩ[j])) * real((dot(dΩ[i] - dΩ[j], n̂[j]))) / abs(dΩ[i] - dΩ[j])
         K_diag(i) = 1/2 * κ[i]
         
-        return 2π/N * [i == j ? 1/2π * complex(K_diag(i)) * J[i] : 1/2π * complex(K(i, j)) * J[j] for i in 1:N, j in 1:N]
+        return 2π / length(dΩ) * M * [i == j ? 1/2π * complex(K_diag(i)) * J[i] : 1/2π * complex(K(i, j)) * J[j] for i in 1:length(dΩ), j in 1:length(dΩ)]
+        # return 2π/N * [i == j ? 1/2π * complex(K_diag(i)) * J[i] : 1/2π * complex(K(i, j)) * J[j] for i in 1:N, j in 1:N]
+    end
+
+    function matvec(dΩ::Array{Complex{Float64}, 1}, s::Complex{Float64})
+        
+        N = length(dΩ)
+        n̂, J, κ = GeomDerivs(dΩ)
+        
+        # matvec function
+        function f(σ)
+            DLP = complex(zeros(N))
+            for i in 1:N
+                r = abs.(dΩ[i] .- dΩ)
+                rdotn = real((dot.(dΩ[i] .- dΩ, n̂)))
+                K = 1/2π * [j == i ? 1/2 * κ[i] : -sqrt(s) * besselk(1, sqrt(s) * r[j]) * rdotn[j] / r[j] for j in 1:N]
+                DLP[i] = 2π/N * sum(K .* J .* σ)
+            end
+            return 1/2 * σ + DLP
+        end
+        
+        # matvec operator
+        return LinearMap(f, N);
+
     end
 
     function solveSKIE(dΩ, f, s)

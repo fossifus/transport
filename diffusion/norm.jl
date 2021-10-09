@@ -20,8 +20,13 @@ using .Talbot
 f(x, s) = sum([1/2π * besselk(0, sqrt(s) * norm(x - x₀)) for x₀ in x₀])
 
 function normal_derivative(dΩ, x₀, f; s)
-    n̂, J, κ = Yukawa.GeomDerivs(dΩ);
-    σ, gmres_log = gmres(-I/2 + Yukawa.DLP(dΩ, s), -f.(dΩ, s); reltol = 1e-12, maxiter=128, log=true);
+    # n̂, J, κ = Yukawa.GeomDerivs(dΩ);
+    n̂ = vcat([d[1] for d in Yukawa.GeomDerivs.(dΩ.dΩ)]...)
+    J = vcat([d[2] for d in Yukawa.GeomDerivs.(dΩ.dΩ)]...)
+    κ = vcat([d[3] for d in Yukawa.GeomDerivs.(dΩ.dΩ)]...)
+    M = dΩ.M
+    dΩ = vcat(dΩ.dΩ...)
+    σ, gmres_log = gmres(-I/2 + Yukawa.DLP(dΩ, M, n̂, J, κ, s), -f.(dΩ, s); reltol = 1e-12, maxiter=128, log=true);
     
     x = [real(dΩ) imag(dΩ)]
     K1(i, j) = besselk(1, sqrt(s) * norm(x[i,:] - x[j,:]))
@@ -69,11 +74,14 @@ x₀ = 5.0 + 0im; N = 64; θ = [2π/N * k for k in 0:N-1]
 dΩ = exp.(im*θ)
 
 ### PLOT TOTAL FLUX 
-T = range(0.1; step=0.5, stop=7.0)
+T = range(1.0; stop=5.0, length=20)
 dcdnₓ = talbot_midpoint(s -> normal_derivative(dΩ, x₀, f; s), γ, Nᵧ)
-plt = plot(T, [abs.(sum(dcdnₓ(t))) * 2π / N for t in T], label=:none)
+flux = [abs.(sum(dcdnₓ(t))) * 2π / N for t in T]
+plt = plot(T, flux, label=:none)
+plot!(T, flux_exact.(T))
 xaxis!("Time"); yaxis!("Flux")
 savefig(plt, "flux.png")
+mat"""plot($flux)"""
 
 ### PLOT POINTWISE FLUX
 T = [0.1, 0.5, 1.0, 5.0, 10.0]
@@ -86,7 +94,7 @@ savefig(plt, "pointwise.png")
 
 ### CONVERGENCE
 # exact total flux from moth paper
-dw=0.0001; flux_exact(t) = 2/π * sum([(besselj0(w) * bessely0(w * norm(x₀)) - besselj0(w * norm(x₀)) * bessely0(w)) / (bessely0(w)^2 + besselj0(w)^2) * w * exp(-w^2t) * dw for w in range(dw; stop=111, step=dw)])
+dw=0.001; flux_exact(t) = 2/π * sum([(besselj0(w) * bessely0(w * norm(x₀)) - besselj0(w * norm(x₀)) * bessely0(w)) / (bessely0(w)^2 + besselj0(w)^2) * w * exp(-w^2t) * dw for w in range(dw; stop=111, step=dw)])
 # plot convergence
 t_test = 1.0; err = []
 for N in [64, 128, 256, 512, 1024]
@@ -260,3 +268,60 @@ plt = plot([64, 128, 256, 512, 1024], err, xaxis=:log, yaxis=:log, marker=:squar
 xlabel!("# Boundary Points")
 ylabel!("Error")
 savefig(plt, "convergence.png")
+
+
+
+
+#############################
+### SMALL TRAPPING REGION ###
+#############################
+
+T = 10 .^ range( log10(0.01), 10, length = 10 )
+# T = range(1.0, 2.0; length=20)
+
+eps = 1.0; dw=0.001; flux_exact(t) = 2/π * sum([(besselj0(w) * bessely0(w * norm(x₀) / eps) - besselj0(w * norm(x₀) / eps) * bessely0(w)) / (bessely0(w)^2 + besselj0(w)^2) * w * exp(-w^2*t/eps^2) * dw for w in range(dw; stop=111, step=dw)])
+# function flux_exact_mat(t)
+#     return mat"""
+#         R = norm($x₀) / $eps
+#         fun = @(w,t) (2/pi).*((bessely(0,R.*w).*besselj(0,w) - bessely(0,w).*besselj(0,R.*w))./(besselj(0,w).^2+bessely(0,w).^2)).*w.*exp(-t.*w.^2);
+#         rho = @(t) integral(@(w) fun(w,t),0,Inf, 'AbsTol',1e-19,'RelTol',1e-19);
+#         rho($t / $eps / $eps)
+#     """
+# end
+
+# plt = plot(T, flux_exact.(T), label=:none)#, xaxis=:log)
+
+x₀ = 5.0 + im * 0.0; N = 128; θ = [2π/N * k for k in 0:N-1]
+dΩ = Boundary(eps * exp.(im * θ))
+n̂, J, κ = Yukawa.GeomDerivs(dΩ.dΩ[1])
+
+### PLOT TOTAL FLUX
+dcdnₓ = talbot_midpoint(s -> normal_derivative(dΩ, x₀, f; s), γ, Nᵧ)
+flux = [abs.(sum(dcdnₓ(t) .* J)) * 2π / N for t in T]
+plot!(T, flux, label=:none)#, xaxis=:log)
+xaxis!("Time"); yaxis!("Flux")
+savefig(plt, "flux.png")
+
+
+
+
+#############################
+### TWO BALLS ###
+#############################
+
+# T = 10 .^ range( log10(0.01), 10, length = 50 )
+T = range(0.1, 0.3; length=10)
+
+x₀ = 0.0 + im * 0.0; N = 64; θ = [2π/N * k for k in 0:N-1]
+dΩ = exp.(im * θ)
+dΩ = [dΩ .+ 2.0im, dΩ .- 2.0im] # 2 circ
+n̂ = vcat([d[1] for d in Yukawa.GeomDerivs.(dΩ)]...)
+J = vcat([d[2] for d in Yukawa.GeomDerivs.(dΩ)]...)
+κ = vcat([d[3] for d in Yukawa.GeomDerivs.(dΩ)]...)
+
+### PLOT TOTAL FLUX
+dcdnₓ = talbot_midpoint(s -> normal_derivative(dΩ, x₀, f; s), γ, Nᵧ)
+flux = [abs.(sum(dcdnₓ(t) .* J)) * 2π / N for t in T]
+plt = plot(T, flux, label=:none)#, xaxis=:log)
+xaxis!("Time"); yaxis!("Flux")
+savefig(plt, "flux.png")

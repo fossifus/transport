@@ -1,9 +1,3 @@
-### TODO ###
-## compare to fine res integral from alan's paper
-## change to neumann and check concentration of mass
-## changing point on contour need diff hankel1?  show that hankel2 solves the ode.  show that hankelh1 does not.  show that this holds regardless of pos/neg root
-## integral equation yukawa solver
-
 using Plots
 using SpecialFunctions
 using FFTW
@@ -20,22 +14,25 @@ using .Fourier
 using .Yukawa
 
 ### BOUNDARY DISCRETIZATION ###
-N = 128; θ = θ = reverse!([2π/(N-1) * k for k in 1:N])
-dΩ = exp.(im*θ) .* (3 .+ sin.(5θ))
-# dΩ = cos.(θ) + im * 3sin.(θ)
+N = 128; θ = reverse!([2π/N * k for k in 1:N]) # CW, exterior
+# N = 128; θ = [2π/N * k for k in 1:N] # CCW, interior
+# dΩ = exp.(im*θ) .* (3 .+ sin.(5θ)) # starfish
+# dΩ = cos.(θ) + im * 3sin.(θ) # ellipse
+dΩ = exp.(im*θ) # circle
 
 ### EVALUATION GRID ###
 Nᵣ = 32; Nᵩ = 128; Rmin = 1.1; Rmax = 10;
 r = range(Rmin; stop=Rmax, length=Nᵣ)
 φ = [2π/(Nᵩ-1) * k for k in 1:Nᵩ]
-Ω = exp.(im*φ) .* (3 .+ sin.(5φ)) * r'
+Ω = exp.(im*φ) * r'
+# Ω = exp.(im*φ) .* (3 .+ sin.(5φ)) * r'
 # Ω = r * (cos.(θ) + im * 3sin.(θ))'
 # plot(dΩ, aspect_ratio=1)
 # scatter!(Ω, color=:black, label=:none, markersize=1)
 
 ### BOUNDARY CONDITION ###
 x₀ = [10+5im, -10+5im, -8im]
-f(x, s) = sum([1/2π * besselk(0, sqrt(s) * norm(x - x₀)) for x₀ in x₀])
+f(x, s) = -sum([1/2π * besselk(0, sqrt(s) * norm(x - x₀)) for x₀ in x₀])
 
 ### TALBOT CONTOUR ###
 Nᵧ = 32; γ = TalbotContour(
@@ -65,7 +62,7 @@ end
 
 ### LOOP OVER TIME ###
 # t = [0.1, 0.5, 2, 10, 20, 40, 60, 80, 100]
-t = [0.5, 2, 20, 100]
+t = [0.5, 2, 10]
 c = [BIESolve(t) for t in t]
 
 ### PLOTTING ###
